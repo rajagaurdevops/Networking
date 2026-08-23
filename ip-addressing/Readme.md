@@ -78,6 +78,8 @@ Subnetting divides a network into smaller networks (subnets). This is fundamenta
 ### Understanding Subnet Masks
 
 A subnet mask is a 32-bit number that divides an IP address into network and host portions.
+                         or
+A number (like 255.255.255.0) that tells the computer which part of the IP address in the network and which part is the host(the specific device).
 
 **How it works**:
 - Binary `1` bits indicate the network portion
@@ -126,6 +128,10 @@ VPC CIDR: 10.0.0.0/16
 ## CIDR Notation
 
 CIDR (Classless Inter-Domain Routing) was introduced in 1993 to replace the older classful addressing system. It provides a more flexible way to allocate IP addresses.
+
+## in simple word
+
+It stands for Classless Inter-Domain Routing. The number after the slash tells you how many bits are "locked" for the network. A /24 means the first 24 bits (three numbers) are the network address
 
 ### Why CIDR Was Needed
 

@@ -78,7 +78,7 @@ Subnetting divides a network into smaller networks (subnets). This is fundamenta
 ### Understanding Subnet Masks
 
 A subnet mask is a 32-bit number that divides an IP address into network and host portions.
-                         or
+                         <or>
 A number (like 255.255.255.0) that tells the computer which part of the IP address in the network and which part is the host(the specific device).
 
 **How it works**:

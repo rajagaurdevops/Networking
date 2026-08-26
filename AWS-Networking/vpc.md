@@ -1,19 +1,3 @@
- # AWS VPC
-
-## Networking Reference Guide
-
-### DevOps Learning Notes
-
-## Topics Covered
-
-- VPC fundamentals
-- Subnets
-- Route tables
-- Internet and NAT gateways
-- VPC peering
-
----
-
 # Part I: VPC Fundamentals
 
 ## 1. What Is a VPC?
@@ -192,3 +176,141 @@ VPC-B
 
 Security groups and network ACLs must allow the required traffic between the
 VPCs.
+
+---
+
+# Part III: Transit Gateway
+
+## 10. Transit Gateway
+
+### 10.1 What Is a Transit Gateway?
+
+A Transit Gateway (TGW) is a regional AWS networking hub that connects
+multiple VPCs and on-premises networks through a single gateway. Instead of
+connecting networks to each other directly, each network connects once to the
+Transit Gateway, which handles routing between them.
+
+### Real-Life Analogy
+
+A Transit Gateway is like an airport hub. Instead of every city needing a
+direct flight to every other city, each city flies to the hub, and the hub
+routes passengers onward.
+
+### 10.2 Why Use a Transit Gateway?
+
+VPC peering connects exactly two VPCs at a time. As the number of VPCs grows,
+connecting every VPC to every other VPC requires a separate peering connection
+for each pair. This is called a full-mesh topology and becomes difficult to
+manage.
+
+```text
+VPC Peering (full mesh)              Transit Gateway (hub-and-spoke)
+
+	 A---B                                   A     B
+	 |\ /|                                    \   /
+	 | X |                                      TGW
+	 |/ \|                                    /   \
+	 C---D                                   C     D
+
+6 peering connections                 4 attachments
+for 4 VPCs (grows fast)                (scales linearly)
+```
+
+- Peering connections grow quadratically as VPCs are added; Transit Gateway
+	attachments grow linearly.
+- A Transit Gateway can also connect VPN connections and AWS Direct Connect,
+	not only VPCs.
+- Routing is centrally controlled through Transit Gateway route tables instead
+	of many separate VPC route tables.
+
+### Main Purpose
+
+Transit Gateway simplifies large-scale network architectures by replacing many
+point-to-point connections with a single central hub.
+
+### 10.3 How Transit Gateway Works
+
+Transit Gateway connectivity uses three core concepts: attachments, route
+tables, and association or propagation.
+
+#### Step 1: Create the Transit Gateway
+
+A Transit Gateway is created in a single AWS Region and acts as the central
+routing hub for that region.
+
+#### Step 2: Create Attachments
+
+Each network that needs to connect through the Transit Gateway is added as an
+attachment:
+
+- **VPC attachment:** Connects a VPC through a subnet in each Availability Zone
+	being used.
+- **VPN attachment:** Connects an on-premises network over a Site-to-Site VPN.
+- **Direct Connect Gateway attachment:** Connects an on-premises network over
+	a dedicated connection.
+- **Peering attachment:** Connects two Transit Gateways, including Transit
+	Gateways in different Regions.
+
+```text
+			 VPC-A          VPC-B          VPC-C
+					|              |              |
+					+------ Transit Gateway ------+
+												 |
+									 On-Premises
+									(VPN / Direct Connect)
+```
+
+#### Step 3: Association and Propagation
+
+Each attachment is linked to a Transit Gateway route table using two separate
+actions:
+
+| Action | What it does |
+| --- | --- |
+| **Association** | Determines which Transit Gateway route table an attachment uses to send traffic. |
+| **Propagation** | Automatically adds an attachment's routes into a Transit Gateway route table so other attachments can reach it. |
+
+### Key Point
+
+Association controls where an attachment looks up routes. Propagation controls
+whether an attachment's own routes appear in that route table.
+
+Using separate route tables for different attachments allows segmented,
+hub-and-spoke traffic control. For example, a shared-services VPC can be made
+reachable by all networks while other networks remain isolated from one
+another.
+
+#### Step 4: Update VPC Route Tables
+
+Each attached VPC's own route table must also send traffic destined for other
+networks to the Transit Gateway.
+
+| Destination | Target |
+| --- | --- |
+| `10.0.0.0/16` | `local` |
+| `20.0.0.0/16` (VPC-B) | Transit Gateway |
+| `30.0.0.0/16` (VPC-C) | Transit Gateway |
+
+### 10.4 Transit Gateway vs. VPC Peering
+
+| Aspect | Comparison |
+| --- | --- |
+| Topology | Peering is point-to-point and commonly forms a mesh; Transit Gateway is hub-and-spoke. |
+| Scaling | Peering connections multiply quickly as VPCs are added; Transit Gateway adds one attachment per network. |
+| On-premises access | Peering connects VPCs only; Transit Gateway also supports VPN and Direct Connect. |
+| Routing control | Peering relies on each VPC's route table; Transit Gateway offers centralized route tables that can segment traffic. |
+| Transitive routing | Peering is not transitive: A-B and B-C do not automatically allow A-C. Transit Gateway supports routing between attachments when the route tables allow it. |
+
+### 10.5 Key Concepts Summary
+
+- **Transit Gateway:** A regional hub that interconnects VPCs, VPNs, Direct
+	Connect, and other supported networks.
+- **Attachment:** A connection between a network and the Transit Gateway. The
+	network can be a VPC, VPN, Direct Connect connection, or another Transit
+	Gateway.
+- **Transit Gateway route table:** Controls how traffic is routed between
+	attachments.
+- **Association:** Links an attachment to the route table it uses for routing
+	decisions.
+- **Propagation:** Automatically populates a route table with an attachment's
+	routes.

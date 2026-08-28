@@ -45,26 +45,6 @@ L1  │ Physical                 │┘             │ (Link Layer)            
     └──────────────────────────┘
 ```
 
-Here is the exact merging breakdown:
-
-### 1. The Application Layer (OSI L5 + L6 + L7)
-In the TCP/IP model, the **Session, Presentation, and Application** layers are combined into a single **Application Layer**.
-* **Why they merged:** In practical programming, formatting data (Presentation) and managing connections (Session) are handled directly inside the user-space application code or browser environment rather than by distinct kernel network stack layers. For instance, your browser tab manages its own user interface (L7), performs TLS encryption/decryption (L6), and maintains session states via cookies/tokens (L5) all in one program.
-
-### 2. The Transport Layer (OSI L4)
-The Transport layer maps directly 1-to-1.
-* It continues to govern port-to-port reliable delivery (TCP) and speed-oriented delivery (UDP).
-
-### 3. The Internet / Network Layer (OSI L3)
-The Network layer in OSI maps to the **Internet Layer** in TCP/IP.
-* It remains responsible for resolving host locations and routing IP packets across the internet.
-
-### 4. The Network Access / Link Layer (OSI L1 + L2)
-In the TCP/IP model, the **Physical and Data Link** layers are merged into the **Network Access Layer** (often referred to as the **Link Layer**).
-* **Why they merged:** Network Interface Cards (NICs) and device drivers handle both functions as a single physical hardware unit. The firmware on an Ethernet card or Wi-Fi chip handles the physical conversion of signals into bits (Physical) as well as framing them using MAC addresses (Data Link) on the fly.
-
----
-
 ## Real-World Scenario: Typing `https://google.com`
 
 Let's trace what happens when you open your browser, type `https://google.com`, and press **Enter**.

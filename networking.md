@@ -71,6 +71,95 @@ This layer is closest to the end user. It provides network services directly to 
 > [!NOTE] 
 > L7 is where most business logic bugs reside. When troubleshooting, if you can `curl` the endpoint but get a `4xx` or `5xx` status code, or a malformed JSON payload, your lower-level connectivity is fully working. The issue lies entirely at the application layer.
 
+#### DNS Resolution: Under the Hood
+
+Before your browser can send an HTTPS request to `https://google.com`, it must translate the human-readable domain name `google.com` into a machine-readable IP address. This translation is performed by the **Domain Name System (DNS)**.
+
+##### The Step-by-Step DNS Resolution Process
+
+If the IP address is not already cached, the DNS lookup traverses a hierarchical system of servers:
+
+```
+[ Browser ] ──(1. Check Local Cache)──> [ Browser/OS/Router Cache ]
+     │                                               │ (Miss)
+     │ (IP Found)                                    ▼
+     └───────────────────────────────> [ DNS Recursive Resolver ] (e.g., 8.8.8.8)
+                                                     │
+                                   ┌─────────────────┼─────────────────┐
+                                   │ (2. Query)      │ (4. Query)      │ (6. Query)
+                                   ▼                 ▼                 ▼
+                         ┌─────────────────┐ ┌───────────────┐ ┌───────────────┐
+                         │ Root Server (.) │ │  TLD Server   │ │ Authoritative │
+                         │                 │ │    (.com)     │ │  Server (IP)  │
+                         └────────┬────────┘ └───────┬───────┘ └───────┬───────┘
+                                  │                  │                 │
+                                  └─(3. Point TLD)───┴─(5. Point Auth)─┴─(7. Return IP)
+```
+
+1. **Step 1: Check Local Cache**
+   * **Browser Cache:** The browser first checks its own record history for `google.com`.
+   * **Operating System Cache:** If the browser doesn't have it, it makes an OS system call. The OS checks its own local DNS resolver cache and the local hosts file (e.g., `/etc/hosts` on macOS/Linux or `C:\Windows\System32\drivers\etc\hosts` on Windows).
+   * **Router Cache:** If still not found, the query is forwarded to the local router, which checks its local cache.
+2. **Step 2: Query the Recursive Resolver**
+   * If the local checks fail, the client sends a query to a **DNS Recursive Resolver** (usually provided by your ISP, or public resolvers like Google's `8.8.8.8` or Cloudflare's `1.1.1.1`).
+   * If the resolver has the IP cached from a recent lookup, it returns it immediately. If not, it begins searching the public internet hierarchy.
+3. **Step 3: Query the Root Nameserver (`.`)**
+   * The resolver sends a query to one of the 13 logical **Root Nameservers** scattered globally.
+   * The Root server does not know the IP for `google.com`. Instead, it reads the Top-Level Domain (TLD) suffix (`.com`) and returns the IP address of the **TLD Nameserver** responsible for `.com` domains.
+4. **Step 4: Query the TLD Nameserver (`.com`)**
+   * The resolver queries the `.com` TLD Nameserver.
+   * The TLD Nameserver does not know the final IP address. Instead, it reads the domain `google.com` and responds with the IP address of Google's **Authoritative Nameservers**.
+5. **Step 5: Query the Authoritative Nameserver**
+   * The resolver queries the Authoritative Nameserver for `google.com`.
+   * Since this server owns the DNS database for `google.com`, it returns the actual IP address (e.g., `142.250.190.46`) along with a **TTL (Time to Live)** value.
+6. **Step 6: Return Result and Cache**
+   * The Recursive Resolver receives the IP address, saves it in its local cache for the duration of the TTL, and passes the IP address back to the client OS.
+   * Your computer's OS and web browser cache the IP address, and the browser proceeds to establish the TCP connection to load `https://google.com`.
+
+##### Key DNS Record Types
+
+* **A Record:** Maps a domain name to an **IPv4** address (e.g., `google.com` $\rightarrow$ `142.250.190.46`).
+* **AAAA Record:** Maps a domain name to an **IPv6** address.
+* **CNAME (Canonical Name):** Maps an alias domain to another domain (e.g., `www.google.com` $\rightarrow$ `google.com`).
+* **MX (Mail Exchanger):** Specifies mail servers responsible for receiving email for the domain.
+* **TXT (Text):** Stores arbitrary text data. Used heavily for domain validation (e.g., Let's Encrypt SSL verification, SPF, DKIM, and DMARC email security records).
+
+---
+
+#### DNS Hijacking: Intercepting the Traffic
+
+**DNS Hijacking** (or DNS redirection) is a cyberattack where an attacker subverts the resolution of DNS queries. Instead of returning the correct IP address for a requested domain, the hijacked DNS settings return the IP address of a rogue server controlled by the attacker. 
+
+Users are redirected to spoofed websites (e.g., a fake online banking portal) designed to steal credentials or inject ads.
+
+##### How Attackers Perform DNS Hijacking
+
+Attackers target different points in the DNS resolution flow:
+
+1. **Local Host Hijacking (Malware):**
+   * **Mechanism:** An attacker infects a client machine with trojan malware that modifies the local OS hosts file (`/etc/hosts`) or alters the network adapter's DNS settings to point to a rogue resolver.
+   * **Result:** Any browser request immediately resolves to fake IPs without ever querying the public DNS network.
+2. **Router Hijacking (Firmware Exploitation):**
+   * **Mechanism:** Attackers exploit default passwords or firmware vulnerabilities in home/office routers. They log in and rewrite the default DNS servers provided by the ISP to rogue DNS servers.
+   * **Result:** Every device on that local Wi-Fi/network is hijacked.
+3. **Man-in-the-Middle (MitM) / DNS Spoofing:**
+   * **Mechanism:** Attackers intercept unencrypted DNS traffic (which runs over UDP port 53 by default) on a local network (e.g., public Wi-Fi). The attacker sends a fake, fast DNS response before the real resolver can reply.
+4. **Domain Registrar Hijacking (Social Engineering / Credential Theft):**
+   * **Mechanism:** Attackers compromise the organization's account at the domain registrar (like GoDaddy or Namecheap) using phishing, credential stuffing, or support social engineering. They then modify the NS (Name Server) records to point to rogue authoritative servers.
+   * **Result:** Global traffic is diverted because the source-of-truth records are changed at the registry level.
+
+##### How to Protect Against DNS Hijacking
+
+###### For Organizations
+* **Deploy DNSSEC (DNS Security Extensions):** DNSSEC cryptographically signs DNS records at the authoritative nameserver. Resolvers verify these signatures, ensuring records have not been forged or tampered with in transit.
+* **Enable Registry Lock (Multi-Registry Lock):** A service offered by registrars that prevents domain modifications (like changing NS records) unless a manual, multi-person out-of-band authentication check is passed.
+* **Enforce MFA and IP Whitelisting:** Strictly require Multi-Factor Authentication (MFA) and lock down registrar administration panels to specific corporate IP ranges.
+* **Monitor DNS Records:** Use automated scripts or external monitoring services to alert on changes to authoritative NS and A records.
+
+###### For Users
+* **Use Encrypted DNS Protocols:** Configure browsers and operating systems to use **DoH (DNS over HTTPS)** or **DoT (DNS over TLS)**. This encrypts DNS queries inside a secure TLS tunnel, preventing local networks from snooping or spoofing responses.
+* **Secure Local Devices & Routers:** Keep router firmware updated, disable WAN management access, change default router passwords, and run active endpoint security (antivirus).
+
 ---
 
 ### Layer 6 — Presentation Layer
@@ -121,6 +210,86 @@ Handles end-to-end data delivery, flow control, error recovery, and segmentation
 > [!NOTE]
 > This is a crucial layer for DevOps engineers. Firewalls, security groups, and load balancers rely heavily on L4 rules. If you cannot reach a server, use `nc -zv <IP> <Port>` to check if the port is listening and reachable. If you get a connection timeout, L4 TCP packets are likely being dropped by a firewall.
 
+#### Ports, Sockets, and IP Addresses: The Multiplexing Magic
+
+To understand how data gets from a browser to a specific application on a server, we must distinguish between three core network identifiers:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  IP Address (Identifies Host) : 142.250.190.46               │
+├──────────────────────────────────────────────────────────────┤
+│  Port Number (Identifies Process) : 443                       │
+├──────────────────────────────────────────────────────────────┤
+│  Socket (Bound Connection Endpoint) : 142.250.190.46:443      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+* **IP Address (Layer 3):** Identifies a specific physical or virtual machine on a network. It is like the mailing address of a large apartment building. It gets the packet to the correct building, but not to the individual resident.
+* **Port Number (Layer 4):** Identifies a specific application or service running on that machine. It is like an individual mailbox or apartment number in that building. For example, web servers bind to port `80` (HTTP) or `443` (HTTPS), while SSH servers listen on port `22`.
+* **Socket:** The logical software endpoint that enables a two-way communication channel between two programs. A socket is created by binding an IP address and a port number together with a protocol (TCP or UDP).
+  $$\text{Socket} = \text{IP Address} + \text{Port Number} + \text{Protocol}$$
+
+##### How Multiple Applications Communicate Through the Same Server IP
+
+A common question is: *If a server has only one public IP address and a single web server application listening on Port 443, how can thousands of clients browse Google at the same time?*
+
+The operating system handles this using **socket pairs** (specifically, the **TCP 5-Tuple**). Every unique connection on a network is defined by five parameters:
+1. **Source IP Address**
+2. **Source Port**
+3. **Destination IP Address**
+4. **Destination Port**
+5. **Protocol** (TCP or UDP)
+
+Because of this, the server does not identify connections solely by its own IP and port. It identifies them by the *combination* of the client's socket and the server's socket.
+
+For example, on Google's web server (`142.250.190.46` listening on Port `443`):
+
+| Active Connection | Client IP (Source IP) | Client Port (Source Port) | Server IP (Dest IP) | Server Port (Dest Port) | Connection Status |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **User A (Tab 1)** | `198.51.100.22` | `54321` | `142.250.190.46` | `443` | Unique Connection |
+| **User A (Tab 2)** | `198.51.100.22` | `54322` | `142.250.190.46` | `443` | Unique Connection |
+| **User B** | `203.0.113.88` | `54321` | `142.250.190.46` | `443` | Unique Connection |
+
+Even though the Destination IP and Port are identical for all entries, the operating system's TCP stack easily routes incoming packets to the correct buffer because each client has a unique Source IP and/or Source Port combination.
+
+---
+
+#### TCP vs. UDP: Key Differences
+
+At the Transport Layer (Layer 4), two primary protocols carry traffic: **TCP (Transmission Control Protocol)** and **UDP (User Datagram Protocol)**.
+
+##### Comparison Table
+
+| Parameter | TCP (Transmission Control Protocol) | UDP (User Datagram Protocol) |
+| :--- | :--- | :--- |
+| **Connection** | Connection-oriented (requires 3-way handshake) | Connectionless (no setup or teardown) |
+| **Reliability** | Guaranteed delivery (retransmits lost packets) | Best-effort (packets can be lost silently) |
+| **Ordering** | Guaranteed in-order delivery of data | No order guarantees (packets can arrive out of order) |
+| **Flow Control** | Yes (limits sender speed to match receiver's speed) | No (sends data as fast as the network allows) |
+| **Congestion Control** | Yes (throttles transmission during network congestion) | No |
+| **Header Size** | 20 to 60 bytes (variable) | 8 bytes (fixed) |
+| **Transmission Unit** | Byte Stream (reconstructs continuous blocks) | Datagrams (independent packets with boundaries) |
+
+---
+
+##### Practical Examples: When to Choose TCP
+
+Choose **TCP** when **data integrity** and **order** are more important than speed. A single lost bit can corrupt the entire message.
+
+1. **HTTP/HTTPS (Web Browsing):** Loading the HTML, CSS, and Javascript for `https://google.com` requires absolute accuracy. A missing Javascript byte could break the page execution.
+2. **SSH / Telnet (Remote Terminal):** Terminal commands and keystrokes must arrive in the exact order they were typed; otherwise, you could run incorrect shell commands.
+3. **Database Queries:** Retrieving records from databases (PostgreSQL, MySQL) requires strict integrity. You cannot afford to lose database rows or cell data in transit.
+4. **API Requests (REST, gRPC):** Application integration payloads must be complete and formatted correctly to prevent JSON or protobuf parsing errors.
+
+##### Practical Examples: When to Choose UDP
+
+Choose **UDP** when **speed** and **low latency** are critical, and losing a few packets is acceptable or easily managed.
+
+1. **Live Video / Audio Streaming (VoIP, Zoom, FaceTime):** Low latency is vital. If a video frame packet is lost, it is better to display a brief glitch (pixelation) rather than pause the video stream for 500ms waiting for a TCP retransmission.
+2. **DNS Queries:** Resolving `google.com` to an IP requires speed. A DNS query is a single request-response. If it gets lost, the client simply times out and retries. Using TCP would double the lookup time due to handshake overhead.
+3. **Real-time Online Gaming:** Fast shooter or sports games need coordinate updates immediately. A packet showing where your teammate was 200ms ago is useless; you only care about the latest packet.
+4. **DHCP (Dynamic Host Configuration Protocol):** Used to assign IPs. DHCP uses UDP broadcasts to reach out to the network when the client doesn't even have an IP address configured yet.
+
 ---
 
 ### Layer 3 — Network Layer
@@ -144,6 +313,49 @@ Handles the routing and forwarding of data packets across different physical net
 > [!NOTE]
 > Layer 3 is the domain of routing tables, VPC subnets, and internet gateways. When testing L3 connectivity, tools like `ping` (ICMP) and `traceroute` are your best friends. If `ping` fails but you can resolve the DNS, you have an IP routing or firewall policy issue at Layer 3.
 
+#### The IPv4 Header Structure
+
+When Layer 3 (Network Layer) receives a TCP Segment from Layer 4, it wraps it inside an **IP Packet** and prepends an **IPv4 Header**. This header contains routing parameters and is typically **20 bytes** long.
+
+##### IPv4 Header Layout (32-Bit Grid)
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+├───────┬───────┬───────────────┬───────────────────────────────┤
+│Version│  IHL  │TypeOf Service │          Total Length         │
+├───────┴───────┴───────────────┼───┬───┬───┬───────────────────┤
+│        Identification         │ R │ D │ M │  Fragment Offset  │
+│                               │   │ F │ F │                   │
+├───────────────┬───────────────┼───┴───┴───┴───────────────────┤
+│ Time to Live  │   Protocol    │        Header Checksum        │
+├───────────────┴───────────────┴───────────────────────────────┤
+│                       Source IP Address                       │
+├───────────────────────────────────────────────────────────────┤
+│                     Destination IP Address                    │
+├───────────────────────────────────────────────────────────────┤
+│                    Options (0 to 40 bytes)                    │
+└───────────────────────────────────────────────────────────────┘
+```
+
+##### Important IPv4 Header Fields
+
+* **Version (4 bits):** Identifies the IP version. For IPv4, this is always `0100` (binary for 4).
+* **IHL (Internet Header Length) (4 bits):** Specifies the length of the IP header in 32-bit words (minimum is `5`, representing 20 bytes).
+* **Total Length (16 bits):** The size of the entire packet (header + payload) in bytes. The maximum possible size is $65,535$ bytes.
+* **Time to Live (TTL) (8 bits):** An expiration counter that prevents packets from routing in infinite loops. Every router that forwards the packet decrements this value by 1. If it hits 0, the packet is discarded and an ICMP "Time Exceeded" message is sent back to the sender.
+* **Protocol (8 bits):** Indicates the next-level protocol in the payload. Common values include `6` for TCP, `17` for UDP, and `1` for ICMP.
+* **Header Checksum (16 bits):** Used for error checking of the header. It must be recalculated at every single router hop because the TTL value changes.
+* **Source IP (32 bits) & Destination IP (32 bits):** The logical addresses of the sender (client) and receiver (server).
+
+##### Packet Fragmentation Fields
+When a packet is larger than the Maximum Transmission Unit (MTU) of a physical link it must traverse (e.g., passing from a 1500-byte Ethernet link to a 1400-byte VPN tunnel), routers use these fields to split the packet:
+* **Identification (16 bits):** A unique ID shared by all fragments of the same original packet.
+* **Flags (3 bits):**
+  * **DF (Don't Fragment):** If set to 1, tells routers *not* to split this packet. If the packet exceeds a link's MTU, the router drops it and sends back an ICMP "Fragmentation Needed" error.
+  * **MF (More Fragments):** If set to 1, indicates that this is a fragment and more are coming. If 0, this is the last fragment.
+* **Fragment Offset (13 bits):** Specifies where this fragment's payload fits in the original, reassembled IP packet payload (measured in 8-byte blocks).
+
 ---
 
 ### Layer 2 — Data Link Layer
@@ -166,6 +378,107 @@ Provides node-to-node data transfer (directly connected devices on the same loca
 
 > [!NOTE]
 > Layer 2 issues usually show up as local interface flaps, duplicate IP assignments (ARP conflicts), or VLAN tagging problems inside virtualized hypervisors or cloud container networks (like Kubernetes CNI overlays). If a VM cannot reach its gateway on the same subnet, check the ARP table (`arp -a`).
+
+#### ARP (Address Resolution Protocol): Mapping IPs to MACs
+
+While routers use logical IP addresses (Layer 3) to route packets across networks, computers can only transmit data locally using physical **MAC addresses** (Layer 2). **ARP** is the glue protocol that maps a known logical IP address to a physical MAC address on a local area network (LAN).
+
+##### How ARP Resolves Addresses (Step-by-Step)
+
+If a laptop (`192.168.1.10`) needs to send an IP packet to its local router (`192.168.1.1`), it must discover the router's MAC address:
+
+```
+       CLIENT (192.168.1.10)                                          ROUTER (192.168.1.1)
+         [ MAC: AA:BB:CC ]                                             [ MAC: 11:22:33 ]
+                 │                                                             │
+                 │ 1. ARP Request: "Who has 192.168.1.1? Tell 192.168.1.10"   │
+                 │────────────────────────────────────────────────────────────>│
+                 │ (Destination MAC: FF:FF:FF:FF:FF:FF - Broadcast)            │
+                 │                                                             │
+                 │ 2. ARP Reply: "I have 192.168.1.1. My MAC is 11:22:33"      │
+                 │<────────────────────────────────────────────────────────────│
+                 │ (Destination MAC: AA:BB:CC - Unicast)                       │
+                 │                                                             │
+        [ Caches mapping: ]                                                    │
+     192.168.1.1 -> 11:22:33                                                   │
+```
+
+1. **Step 1: Check Local ARP Cache:**
+   * The OS first checks its internal database, called the **ARP Cache**. If the IP-to-MAC mapping is already listed, it grabs the MAC address and skips any network requests.
+2. **Step 2: Send an ARP Request (Broadcast):**
+   * If the MAC is not cached, the client broadcasts an ARP Request frame to all devices on the local subnet.
+   * Because it doesn't know the destination MAC, it sets the destination MAC to `FF:FF:FF:FF:FF:FF` (the layer-2 broadcast address).
+   * Every device on the local network segment reads the request: *"Who has IP address `192.168.1.1`? Tell `192.168.1.10`."*
+3. **Step 3: Send an ARP Reply (Unicast):**
+   * All devices receive the broadcast, but only the host matching the requested IP address (`192.168.1.1`) responds.
+   * The router replies directly to the client's MAC address (Unicast): *"I have `192.168.1.1`. My MAC address is `11:22:33:44:55:66`."*
+4. **Step 4: Cache and Transmit:**
+   * The client receives the unicast reply, saves the mapping in its local ARP cache, and uses the MAC address to package the pending IP packet into an Ethernet frame for physical transmission.
+
+---
+
+##### Special ARP Types
+
+* **Gratuitous ARP:** A broadcast packet sent by a host to announce its own IP-to-MAC mapping to the local network when its interface turns on or changes. It serves two purposes:
+  1. **IP Conflict Detection:** If another host responds to this broadcast, it indicates an IP address conflict.
+  2. **Force-Update Caches:** It updates the local ARP caches of all other devices on the segment immediately (crucial when shifting an IP to a backup server during high-availability failovers).
+
+---
+
+#### DHCP DORA: Obtaining an IP Address
+
+Before a device can communicate at Layer 3 (Network Layer) using IP addresses, it must obtain an IP address. On most networks, this is handled dynamically by a DHCP (Dynamic Host Configuration Protocol) server using the **DORA** process:
+
+* **D**iscover
+* **O**ffer
+* **R**equest
+* **A**cknowledge
+
+##### The DORA Process Diagram
+
+Because a new client does not yet have an IP address, it communicates using MAC addresses and IP **broadcasts** (`255.255.255.255`).
+
+```
+       CLIENT                                                     SERVER
+   (MAC: AA:BB:CC)                                            (DHCP Server)
+  [ IP: 0.0.0.0 ]                                            [ IP: 192.168.1.1 ]
+          │                                                          │
+          │             1. DHCP DISCOVER (Broadcast)                 │
+          │─────────────────────────────────────────────────────────>│
+          │      Src IP: 0.0.0.0        | Dest IP: 255.255.255.255   │
+          │      Src Port: 68           | Dest Port: 67              │
+          │                                                          │
+          │             2. DHCP OFFER (Unicast/Broadcast)            │
+          │<─────────────────────────────────────────────────────────│
+          │      Offered IP: 192.168.1.10                            │
+          │      Gateway: 192.168.1.1   | Subnet: 255.255.255.0      │
+          │                                                          │
+          │             3. DHCP REQUEST (Broadcast)                  │
+          │─────────────────────────────────────────────────────────>│
+          │      Requesting: 192.168.1.10                            │
+          │                                                          │
+          │             4. DHCP ACK (Unicast/Broadcast)              │
+          │<─────────────────────────────────────────────────────────│
+          │      Lease Confirmed (e.g., 24 Hours)                    │
+          │                                                          │
+  [ IP: 192.168.1.10 ]                                               │
+```
+
+##### Step-by-Step Breakdown
+
+1. **Discover (Client $\rightarrow$ Server):**
+   * **What happens:** The client boots up and sends a broadcast packet on the local subnet searching for a DHCP server.
+   * **Networking details:** 
+     * Source IP: `0.0.0.0` | Destination IP: `255.255.255.255` (Broadcast)
+     * Source Port: `68` | Destination Port: `67` (UDP)
+2. **Offer (Server $\rightarrow$ Client):**
+   * **What happens:** Any DHCP servers on the subnet receive the request and respond with a lease offer.
+   * **Networking details:** The server proposes an IP address (e.g., `192.168.1.10`), subnet mask (`255.255.255.0`), default gateway (`192.168.1.1`), lease time (e.g., 24 hours), and DNS server addresses.
+3. **Request (Client $\rightarrow$ Server):**
+   * **What happens:** The client chooses one offer (if there are multiple servers) and broadcasts a request packet to finalize the lease.
+   * **Why it is broadcast:** The packet is broadcast so *all* DHCP servers on the subnet see it. The chosen server knows to lock down the lease, while other servers know their offers were declined and can release those reserved IPs back to their pool.
+4. **Acknowledge (Server $\rightarrow$ Client):**
+   * **What happens:** The selected DHCP server acknowledges the request, committing the IP-to-MAC binding to its database. The client is now configured and can begin standard network communication.
 
 ---
 
@@ -212,6 +525,73 @@ When the bits arrive at Google, the process is reversed:
 4. **L4**: Strips off the TCP header, verifies port 443, reassembles segment fragments, and hands it to the web server process.
 5. **L5/L6**: Handles TLS decryption and session context.
 6. **L7**: The web server receives the HTTPS request, processes it, and generates an HTML response to send back down the stack.
+
+---
+
+## The TCP Header Structure
+
+At Layer 4 (Transport Layer), application data is wrapped inside a TCP Segment. The operating system prepends a **TCP Header** containing control fields that enable reliability, flow control, and connection tracking. 
+
+A standard TCP header is **20 bytes** (160 bits) long when no options are specified.
+
+### TCP Header Layout (32-Bit Grid)
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+├───────────────────────────────┼───────────────────────────────┤
+│          Source Port          │       Destination Port        │
+├───────────────────────────────┴───────────────────────────────┤
+│                        Sequence Number                        │
+├───────────────────────────────────────────────────────────────┤
+│                     Acknowledgment Number                     │
+├───────┬───────┬───────────────┬───────────────────────────────┤
+│ Data  │       │  C E U A P R S│                               │
+│ Offset│Reserved│  W R G C S S Y│          Window Size          │
+│       │       │  R E   K H T N│                               │
+├───────┴───────┴───────────────┼───────────────────────────────┤
+│           Checksum            │        Urgent Pointer         │
+├───────────────────────────────┴───────────────────────────────┤
+│                    Options (0 to 40 bytes)                    │
+└───────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Important TCP Header Fields
+
+#### 1. Source Port (16 bits) & Destination Port (16 bits)
+* **What they do:** Identify the sending process (source) and the receiving process (destination).
+* **Details:** The destination port indicates the target service (e.g., `443` for HTTPS, `80` for HTTP, `22` for SSH). The source port is a dynamic high port (often between `32768` and `60999`) assigned by the client OS.
+
+#### 2. Sequence Number (32 bits)
+* **What it does:** Tracks the position of the first data byte of this segment in the overall data stream.
+* **Why it matters:** Ensures data arrives intact and allows the receiving host to reassemble out-of-order packets.
+
+#### 3. Acknowledgment Number (32 bits)
+* **What it does:** Specifies the next sequence number/byte that the sender expects to receive.
+* **Details:** This field is only valid if the `ACK` flag is set. It tells the other side: "I have successfully received all bytes up to `Ack - 1`. Send byte `Ack` next."
+
+#### 4. Data Offset / Header Length (4 bits)
+* **What it does:** Specifies the size of the TCP header in 32-bit words.
+* **Why it matters:** Since the Options field is variable-length, the receiver needs to know where the TCP header ends and the actual payload data begins.
+
+#### 5. Control Flags (9 bits total)
+These flags control connection states and how data is handled:
+* **SYN (Synchronize):** Requests connection establishment (used during handshake).
+* **ACK (Acknowledgment):** Indicates that the Acknowledgment Number field is valid.
+* **FIN (Finish):** Requests graceful connection termination.
+* **RST (Reset):** Forcefully terminates/rejects a connection (usually due to a closed port or crash).
+* **PSH (Push):** Instructs the receiver to pass data immediately to the application rather than buffering it.
+* **URG (Urgent):** Indicates that the data in the segment is urgent (should be processed out of order).
+
+#### 6. Window Size (16 bits)
+* **What it does:** Used for **Flow Control** (via the Sliding Window algorithm).
+* **Details:** Specifies the number of bytes the sender of this segment is willing to accept from the receiver without receiving another acknowledgment. This prevents a fast sender from overwhelming a slow receiver.
+
+#### 7. Checksum (16 bits)
+* **What it does:** Used for error checking.
+* **Details:** The sender calculates a checksum hash of the TCP header, the payload data, and a pseudo-IP header. If the receiver computes a different checksum value upon arrival, the segment is discarded as corrupted.
 
 ---
 
@@ -341,6 +721,78 @@ When a host initiates a graceful TCP shutdown, it does not transition directly f
 There are two primary reasons for this design:
 1. **To guarantee delivery of the final ACK:** If the final `ACK` (Step 4) is lost in transit, the receiver will timeout in `LAST-ACK` state and retransmit its `FIN` (Step 3). Since the initiator is still in `TIME-WAIT`, it can receive that `FIN` and re-send the `ACK`. If the initiator had closed immediately, it would respond to the retransmitted `FIN` with a `RST` (Reset), causing the receiver to report a connection error.
 2. **To allow duplicate segments to drain:** It prevents delayed or wandering packets from the old connection from being received by a new connection utilizing the same IP address and port numbers.
+
+---
+
+## Load Balancing: Layer 4 vs. Layer 7
+
+A **Load Balancer (LB)** acts as a traffic cop sitting in front of your servers, distributing client requests across all servers capable of fulfilling those requests. In cloud architecture (like AWS), load balancing is divided into two primary types operating at different layers of the OSI model:
+
+```
+        CLIENT TRAFFIC
+              │
+              ▼
+    ┌───────────────────┐
+    │   LOAD BALANCER   │
+    └─────────┬─────────┘
+              ├──────────────────────────────┐
+              ▼ (Layer 4)                    ▼ (Layer 7)
+    ┌───────────────────┐          ┌───────────────────┐
+    │     TCP / UDP     │          │   HTTP / HTTPS    │
+    │  IPs & Ports Only │          │   Path / Header   │
+    └───────────────────┘          └───────────────────┘
+```
+
+---
+
+### Layer 4 Load Balancing (Transport Layer)
+
+Layer 4 load balancing operates at the **Transport Layer** (TCP/UDP). It makes routing decisions purely based on network variables without inspecting the contents of the packet.
+
+* **How it works:** The load balancer intercepts a packet and reads the **Source IP, Source Port, Destination IP, Destination Port, and Protocol**. It then applies a load-balancing algorithm (like Round Robin) and forwards the packet to a backend server.
+* **SSL/TLS Handling:** It does not decrypt the packet. It simply forwards the encrypted byte stream directly to the target server, where SSL termination occurs.
+* **Pros:**
+  * **Ultra-high Performance:** Since it doesn't open or inspect the packet payload, it requires very little CPU. It can handle millions of requests per second with microsecond latency.
+  * **Protocol Agnostic:** Can load balance any TCP/UDP traffic (e.g., database pools, SMTP, RTMP, gaming protocols).
+* **Cons:**
+  * **No Smart Routing:** Cannot route based on HTTP headers, cookies, or URL paths (e.g., cannot route `/api` to one pool and `/static` to another).
+  * **No Cookie Sticky Sessions:** Cannot read HTTP cookies to pin a client to a specific server.
+
+> [!TIP]
+> **AWS Example — Network Load Balancer (NLB):**  
+> Use an AWS NLB when you need to handle sudden, volatile traffic spikes (millions of RPS), route non-HTTP protocols (such as SSH, database traffic, or MQTT), or preserve the client's source IP address all the way to the backend instances.
+
+---
+
+### Layer 7 Load Balancing (Application Layer)
+
+Layer 7 load balancing operates at the **Application Layer** (HTTP/HTTPS, gRPC). It opens the packet and makes routing decisions based on the **actual content** of the request.
+
+* **How it works:** The load balancer terminates the incoming TCP connection, decrypts the SSL/TLS session, and parses the HTTP request headers, cookie states, URL paths, and query parameters. It then makes a smart routing decision before establishing a new TCP connection to forward the request to the target server.
+* **SSL/TLS Handling:** It performs **SSL Termination**—decrypting the incoming HTTPS request at the load balancer level so it can read the headers, then optionally re-encrypting it or forwarding it as plaintext HTTP to the backend server in a private VPC subnet.
+* **Pros:**
+  * **Smart / Content-Based Routing:** Can route traffic based on URL path (e.g., `/images/*` $\rightarrow$ S3 Target Group, `/api/*` $\rightarrow$ ECS Cluster), or Host headers (e.g., `app1.domain.com` $\rightarrow$ Group A, `app2.domain.com` $\rightarrow$ Group B).
+  * **Sticky Sessions:** Can read or inject cookies to ensure a client stays connected to the same backend server (vital for stateful legacy apps).
+  * **Security Integration:** Can integrate with Web Application Firewalls (WAF) to inspect payloads for SQL injection or cross-site scripting (XSS) before forwarding traffic.
+* **Cons:**
+  * **Higher Latency:** Decrypting, parsing, and re-encrypting packets requires significant CPU power, introducing millisecond-level latency.
+  * **HTTP Centric:** Only supports application-layer protocols (HTTP, HTTPS, gRPC, WebSockets).
+
+> [!TIP]
+> **AWS Example — Application Load Balancer (ALB):**  
+> Use an AWS ALB for modern microservice architectures, containers (ECS/EKS), serverless functions (Lambda targets), and standard web applications where path-based routing, SSL termination, and WAF integration are required.
+
+---
+
+##### Summary Comparison
+
+| Feature | Layer 4 Load Balancer (NLB) | Layer 7 Load Balancer (ALB) |
+| :--- | :--- | :--- |
+| **OSI Layer** | Layer 4 (Transport) | Layer 7 (Application) |
+| **Routing Input** | IPs, Ports, Protocol | URL Path, Host Header, Cookies, Query Params |
+| **Inspection** | None (acts as a packet forwarder) | Full (decrypts and parses HTTP request) |
+| **Latency** | Microsecond range (extremely low) | Millisecond range (higher CPU utilization) |
+| **AWS Product** | **Network Load Balancer (NLB)** | **Application Load Balancer (ALB)** |
 
 ---
 

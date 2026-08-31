@@ -269,16 +269,6 @@ The main purpose of the handshake is to synchronize sequence numbers and establi
 
 ---
 
-> [!NOTE]
-> **Antigravity's Opinion (The DevOps Angle):**
-> Understanding the states of the TCP handshake is key to troubleshooting traffic anomalies:
-> 
-> * **Stuck in `SYN-SENT`:** If you run `ss -antp` or `netstat` and see connections stuck in `SYN-SENT`, your host is sending out SYNs but receiving no reply. This indicates either a network routing issue, a firewall dropping the packets silently on the way, or the destination port is closed/dead.
-> * **Stuck in `SYN-RECV` / `SYN-RECEIVED`:** If you see many connections on your server stuck in `SYN_RECV`, it could be a sign of a **SYN Flood Attack**. Attackers send spoofed SYN packets but never complete Step 3 (ACK). This fills the server's connection queue (backlog buffer), locking out legitimate users. To mitigate this, enable TCP SYN Cookies (`sysctl -w net.ipv4.tcp_syncookies=1`).
-> * **TCP Reset (`RST`):** If a client sends a `SYN` and the server immediately responds with an `RST` (Reset) packet instead of `SYN-ACK`, it means the server is alive but refusing connection. This usually happens when no process is listening on that port, or a local firewall (like `iptables`/`nftables`) explicitly rejects the connection.
-
----
-
 ## DevOps Reference: Troubleshooting Tools by Layer
 
 Having a structured mental model allows you to isolate issues systematically.

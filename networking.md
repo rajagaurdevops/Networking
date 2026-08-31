@@ -269,6 +269,81 @@ The main purpose of the handshake is to synchronize sequence numbers and establi
 
 ---
 
+## TCP Connection Termination: The Four-Way Handshake
+
+Unlike connection establishment (which is a 3-way process), connection termination is a **4-way process**. Because TCP connections are full-duplex (data can flow in both directions independently), each direction must be shut down individually. 
+
+The party that initiates the termination sends a **FIN** (Finish) packet, and the other side acknowledges it. Once both sides have finished sending data and terminated their directions, the connection is closed.
+
+### The Termination Diagram
+
+```
+       CLIENT                                                     SERVER
+   (192.168.1.10)                                             (Google Server)
+ [ State: ESTABLISHED ]                                    [ State: ESTABLISHED ]
+          │                                                          │
+          │             1. FIN (Seq = A, Ack = B)                    │
+          │─────────────────────────────────────────────────────────>│
+   [ State: FIN-WAIT-1 ]                                     [ State: CLOSE-WAIT ]
+          │                                                          │
+          │             2. ACK (Seq = B, Ack = A+1)                  │
+          │<─────────────────────────────────────────────────────────│
+   [ State: FIN-WAIT-2 ]                                             │
+          │                                                    (Server sends
+          │                                                    remaining data)
+          │                                                          │
+          │             3. FIN (Seq = B, Ack = A+1)                  │
+          │<─────────────────────────────────────────────────────────│
+   [ State: TIME-WAIT ]                                      [ State: LAST-ACK ]
+          │                                                          │
+          │             4. ACK (Seq = A+1, Ack = B+1)                │
+          │─────────────────────────────────────────────────────────>│
+          │                                                  [ State: CLOSED ]
+   [ Wait 2MSL (2 mins) ]                                            │
+   [ State: CLOSED ]                                                 │
+```
+
+---
+
+### Step-by-Step Breakdown
+
+#### 1. FIN (from Active Initiator)
+* **Who sends it:** The host closing the connection (usually the Client, but can be the Server).
+* **What it contains:** A packet with the `FIN` (Finish) flag set to `1` and sequence number `Seq = A`.
+* **Meaning:** "I have finished sending data. I want to close my side of the connection."
+* **State Change:** Initiator transitions to `FIN-WAIT-1`.
+
+#### 2. ACK (from Receiver)
+* **Who sends it:** The receiving host.
+* **What it contains:** A packet with the `ACK` flag set to `1` and acknowledgment number `Ack = A + 1`.
+* **Meaning:** "I received your request to close. I acknowledge your FIN."
+* **State Change:** Receiver transitions to `CLOSE-WAIT`. Initiator transitions to `FIN-WAIT-2`.
+* **Half-Closed State:** The connection is now half-closed. The initiator can no longer send data, but it can still receive data if the receiver has pending payloads to send.
+
+#### 3. FIN (from Receiver)
+* **Who sends it:** The receiving host (once it is done sending all remaining data).
+* **What it contains:** A packet with the `FIN` flag set to `1` and sequence number `Seq = B` (and acknowledging the initiator's state via `Ack = A + 1`).
+* **Meaning:** "I have finished sending my remaining data too. I want to close my side of the connection now."
+* **State Change:** Receiver transitions to `LAST-ACK`.
+
+#### 4. ACK (from Active Initiator)
+* **Who sends it:** The initiator.
+* **What it contains:** A packet with the `ACK` flag set to `1` and acknowledgment number `Ack = B + 1`.
+* **Meaning:** "Acknowledged. I received your FIN. Goodbye."
+* **State Change:** Initiator transitions to `TIME-WAIT`. The receiver transitions to `CLOSED` immediately upon receiving this final ACK.
+
+---
+
+### The Importance of the `TIME-WAIT` State
+
+When a host initiates a graceful TCP shutdown, it does not transition directly from `TIME-WAIT` to `CLOSED`. Instead, it remains in the `TIME-WAIT` state for a duration of **2MSL** (Maximum Segment Lifetime, typically 1 to 4 minutes total).
+
+There are two primary reasons for this design:
+1. **To guarantee delivery of the final ACK:** If the final `ACK` (Step 4) is lost in transit, the receiver will timeout in `LAST-ACK` state and retransmit its `FIN` (Step 3). Since the initiator is still in `TIME-WAIT`, it can receive that `FIN` and re-send the `ACK`. If the initiator had closed immediately, it would respond to the retransmitted `FIN` with a `RST` (Reset), causing the receiver to report a connection error.
+2. **To allow duplicate segments to drain:** It prevents delayed or wandering packets from the old connection from being received by a new connection utilizing the same IP address and port numbers.
+
+---
+
 ## DevOps Reference: Troubleshooting Tools by Layer
 
 Having a structured mental model allows you to isolate issues systematically.

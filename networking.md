@@ -215,6 +215,70 @@ When the bits arrive at Google, the process is reversed:
 
 ---
 
+## TCP Three-Way Handshake: Establishing a Connection
+
+Before Layer 4 (Transport Layer) can transmit any application data (such as the HTTP request for `https://google.com`), TCP must establish a reliable, stateful connection between the client (your laptop) and the server (Google). This is achieved through the **TCP Three-Way Handshake**.
+
+The main purpose of the handshake is to synchronize sequence numbers and establish initial buffer sizes for flow control on both sides.
+
+### The Handshake Diagram
+
+```
+       CLIENT                                                     SERVER
+   (192.168.1.10)                                             (Google Server)
+   [ State: CLOSED ]                                         [ State: LISTEN ]
+          │                                                          │
+          │                   1. SYN (Seq = X)                       │
+          │─────────────────────────────────────────────────────────>│
+   [ State: SYN-SENT ]                                       [ State: SYN-RECEIVED ]
+          │                                                          │
+          │               2. SYN-ACK (Seq = Y, Ack = X+1)            │
+          │<─────────────────────────────────────────────────────────│
+          │                                                          │
+          │                   3. ACK (Ack = Y+1)                     │
+          │─────────────────────────────────────────────────────────>│
+   [ State: ESTABLISHED ]                                    [ State: ESTABLISHED ]
+          │                                                          │
+          │ ════════════════════════════════════════════════════════ │
+          │             Connection Ready for Data Transfer           │
+```
+
+---
+
+### Step-by-Step Breakdown
+
+#### 1. SYN (Synchronize)
+* **Who sends it:** The Client (your browser/OS).
+* **What it contains:** A packet with the `SYN` (Synchronize) control flag set to `1`. It includes a randomly generated **Initial Sequence Number (ISN)**, let's call it `X` (`Seq=X`).
+* **Meaning:** "Hello! I want to open a connection with you on port 443. My sequence numbering will start at `X`."
+* **State Change:** Client transitions from `CLOSED` to `SYN-SENT`.
+
+#### 2. SYN-ACK (Synchronize-Acknowledgment)
+* **Who sends it:** The Server (Google).
+* **What it contains:** A packet with both `SYN` and `ACK` flags set to `1`. It contains:
+  1. An acknowledgment number `Ack = X + 1` (confirming it received the client's SYN).
+  2. Its own randomly generated Initial Sequence Number, let's call it `Y` (`Seq=Y`).
+* **Meaning:** "I received your request and acknowledge your starting sequence number `X` (I'm ready for byte `X+1`). I also want to establish connection on my side; here is my starting sequence number `Y`."
+* **State Change:** Server transitions from `LISTEN` to `SYN-RECEIVED`.
+
+#### 3. ACK (Acknowledgment)
+* **Who sends it:** The Client.
+* **What it contains:** A packet with the `ACK` flag set to `1`. It contains an acknowledgment number `Ack = Y + 1` (confirming it received the server's SYN-ACK).
+* **Meaning:** "Received! I acknowledge your starting sequence number `Y` (I am ready for byte `Y+1`). The connection is now established."
+* **State Change:** Client transitions to `ESTABLISHED`. Upon receiving this packet, the server also transitions to `ESTABLISHED`.
+
+---
+
+> [!NOTE]
+> **Antigravity's Opinion (The DevOps Angle):**
+> Understanding the states of the TCP handshake is key to troubleshooting traffic anomalies:
+> 
+> * **Stuck in `SYN-SENT`:** If you run `ss -antp` or `netstat` and see connections stuck in `SYN-SENT`, your host is sending out SYNs but receiving no reply. This indicates either a network routing issue, a firewall dropping the packets silently on the way, or the destination port is closed/dead.
+> * **Stuck in `SYN-RECV` / `SYN-RECEIVED`:** If you see many connections on your server stuck in `SYN_RECV`, it could be a sign of a **SYN Flood Attack**. Attackers send spoofed SYN packets but never complete Step 3 (ACK). This fills the server's connection queue (backlog buffer), locking out legitimate users. To mitigate this, enable TCP SYN Cookies (`sysctl -w net.ipv4.tcp_syncookies=1`).
+> * **TCP Reset (`RST`):** If a client sends a `SYN` and the server immediately responds with an `RST` (Reset) packet instead of `SYN-ACK`, it means the server is alive but refusing connection. This usually happens when no process is listening on that port, or a local firewall (like `iptables`/`nftables`) explicitly rejects the connection.
+
+---
+
 ## DevOps Reference: Troubleshooting Tools by Layer
 
 Having a structured mental model allows you to isolate issues systematically.
